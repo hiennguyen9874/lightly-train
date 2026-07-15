@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Distillation: DINOv3 (teacher) → MobileNetV3-Large (student).
+Distillation: DINOv3 (teacher) → tinyvit (student).
 
 Teacher: DINOv3 ViT-B/16 (dinov3/vitb16)
 Student: TIMM tiny_vit_5m_224 (pretrained on ImageNet-1k with RandAugment)
@@ -11,11 +11,11 @@ import lightly_train
 
 # ── Config ──────────────────────────────────────────────────────────────────
 DATA_DIR = "/home/jovyan/workspace/datasets/violence/data_hfps_tris_v1/processed/frames/train/"
-OUT_DIR = "out/distill_dinov3_mobilenetv3"
+OUT_DIR = "out/distill_dinov3_tinyvit"
 TEACHER = "dinov3/vitb16"          # DINOv3 ViT-B/16 teacher
-STUDENT = "timm/tiny_vit_5m_224"  # MobileNetV3-Large student
-WANDB_PROJECT = "dinov3-mobilenetv3-distillation"
-WANDB_RUN_NAME = "dinov3-to-mobilenetv3"
+STUDENT = "timm/tiny_vit_5m_224"  # tinyvit student
+WANDB_PROJECT = "dinov3-distillation"
+WANDB_RUN_NAME = "dinov3-to-tinyvit"
 
 # ── Pretrain ────────────────────────────────────────────────────────────────
 lightly_train.pretrain(
