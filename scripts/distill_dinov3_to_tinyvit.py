@@ -31,7 +31,7 @@ lightly_train.pretrain(
     num_workers=4, # "auto"
     devices="auto",
     precision="bf16-mixed",
-    overwrite=True,
+    resume_interrupted=True,
     loggers={
         "wandb": {
             "project": WANDB_PROJECT,
