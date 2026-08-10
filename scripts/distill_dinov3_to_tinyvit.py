@@ -15,7 +15,7 @@ import lightly_train
 DATA_DIR = "/home/jovyan/workspace/datasets/TrafficAccidentDetection/raw-frames"
 OUT_DIR = "out/traffic-accident/distill_dinov3_tinyvit"
 TEACHER = "dinov3/vitb16"          # DINOv3 ViT-B/16 teacher
-STUDENT = "timm/tiny_vit_5m_224"  # tinyvit student
+STUDENT = "timm/tiny_vit_5m_224.dist_in22k"  # tinyvit student
 WANDB_PROJECT = "dinov3-distillation"
 WANDB_RUN_NAME = "dinov3-to-tinyvit"
 
@@ -24,6 +24,7 @@ lightly_train.pretrain(
     out=OUT_DIR,
     data=DATA_DIR,
     model=STUDENT,
+    model_args={"pretrained": True},
     method="distillation",          # DistillationV3 (default): global + local loss
     method_args={
         "teacher": TEACHER,

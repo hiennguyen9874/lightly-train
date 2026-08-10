@@ -24,6 +24,7 @@ lightly_train.pretrain(
     out=OUT_DIR,
     data=DATA_DIR,
     model=STUDENT,
+    model_args={"pretrained": True},
     method="distillation",          # DistillationV3 (default): global + local loss
     method_args={
         "teacher": TEACHER,
