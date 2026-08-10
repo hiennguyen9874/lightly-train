@@ -14,7 +14,7 @@ from __future__ import annotations
 import lightly_train
 
 DATA_DIR = "/home/jovyan/workspace/datasets/traffic-images"
-OUT_DIR = "out/distill_dinov3_vitl16_yolo26s"
+OUT_DIR = "out/trisroad-traffic/distill_dinov3_vitl16_yolo26s"
 TEACHER = "dinov3/vitl16"
 STUDENT = "ultralytics/yolo26s.yaml"
 WANDB_PROJECT = "dinov3-distillation"
