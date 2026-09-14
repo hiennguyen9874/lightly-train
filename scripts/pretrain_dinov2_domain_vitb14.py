@@ -19,6 +19,8 @@ MODEL = "dinov2/vitb14"  # ViT-B/14 kèm weight Meta. Dùng "dinov2/vitb14-notpr
 # Dùng (252, 126) tránh lỗi reshape patch token của DINOv2 khi kích thước
 # đầu vào không chia hết cho 14.
 IMAGE_SIZE = (252, 126)  # (H, W)
+WANDB_PROJECT = "dinov3-distillation"
+WANDB_RUN_NAME = "dinov2_domain_vitb14"
 
 # ── Pretrain ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
@@ -37,4 +39,11 @@ if __name__ == "__main__":
         precision="bf16-mixed",  # Bật nếu GPU hỗ trợ bf16.
         # resume_interrupted=True,  # Bật khi muốn chạy tiếp run bị crash.
         # overwrite=False,
+        loggers={
+            "wandb": {
+                "project": WANDB_PROJECT,
+                "name": WANDB_RUN_NAME,
+                "log_model": False,
+            },
+        },
     )

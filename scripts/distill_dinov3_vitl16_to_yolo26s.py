@@ -41,13 +41,13 @@ def main() -> None:
         devices="auto",
         precision="bf16-mixed",
         resume_interrupted=True,
-    loggers={
-        "wandb": {
-            "project": WANDB_PROJECT,
-            "name": WANDB_RUN_NAME,
-            "log_model": False,
+        loggers={
+            "wandb": {
+                "project": WANDB_PROJECT,
+                "name": WANDB_RUN_NAME,
+                "log_model": False,
+            },
         },
-    },
     )
 
 

@@ -23,6 +23,8 @@ TEACHER_WEIGHTS = "out/person-on-motorbike/dinov2_domain_vitb14/exported_models/
 # Giữ cùng size với B1. Kích thước ratio 2:1 này chia hết cho patch size
 # 14 của teacher DINOv2, tránh lỗi reshape patch token.
 IMAGE_SIZE = (252, 126)  # (H, W)
+WANDB_PROJECT = "dinov3-distillation"
+WANDB_RUN_NAME = "tinyvit_from_dinov2_domain"
 
 # ── Pretrain (distillation) ─────────────────────────────────────────────────
 if __name__ == "__main__":
@@ -46,4 +48,11 @@ if __name__ == "__main__":
         # precision="bf16-mixed",  # Bật nếu GPU hỗ trợ bf16.
         # resume_interrupted=True,  # Bật khi muốn chạy tiếp run bị crash.
         # overwrite=False,
+        loggers={
+            "wandb": {
+                "project": WANDB_PROJECT,
+                "name": WANDB_RUN_NAME,
+                "log_model": False,
+            },
+        },
     )
