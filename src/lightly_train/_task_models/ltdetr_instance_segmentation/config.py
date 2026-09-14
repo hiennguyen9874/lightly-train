@@ -12,9 +12,40 @@ from typing import Any, Literal
 from pydantic import Field
 
 from lightly_train._configs.config import ConfigsNamespace, PydanticConfig
-from lightly_train._configs.model_registry import ModelRegistry
+from lightly_train._configs.model_registry import (
+    DownloadableCheckpoint,
+    ModelAlias,
+    ModelRegistry,
+)
 
 LTDETR_SEG_MODEL_REGISTRY: ModelRegistry[SegmentorConfig] = ModelRegistry()
+
+# COCO-pretrained ECViT LT-DETR instance-segmentation weights. The URLs are paths
+# relative to DOWNLOADABLE_MODEL_BASE_URL.
+_LTDETRV2_SEG_S_COCO_URL = (
+    "ecvit_ltdetrv2_seg_coco/edgecrafter_ecvitt_ltdetr_seg_coco_260721_5c7e0089.pt"
+)
+_LTDETRV2_SEG_S_COCO_SHA256 = (
+    "5c7e00895e10a5b8a14cb9ad1c164232a16af302719fd7a2f7de241264155c15"
+)
+_LTDETRV2_SEG_M_COCO_URL = (
+    "ecvit_ltdetrv2_seg_coco/edgecrafter_ecvittplus_ltdetr_seg_coco_260722_4527278b.pt"
+)
+_LTDETRV2_SEG_M_COCO_SHA256 = (
+    "4527278b7e1d819fecbf72fb90554f665a506f178ef30b32f22c227107970384"
+)
+_LTDETRV2_SEG_L_COCO_URL = (
+    "ecvit_ltdetrv2_seg_coco/edgecrafter_ecvits_ltdetr_seg_coco_260721_601b9d8b.pt"
+)
+_LTDETRV2_SEG_L_COCO_SHA256 = (
+    "601b9d8b51d73105ad11feae0dfc4d8d085a12d0afac3f991e7d83f9f493d58b"
+)
+_LTDETRV2_SEG_X_COCO_URL = (
+    "ecvit_ltdetrv2_seg_coco/edgecrafter_ecvitsplus_ltdetr_seg_coco_260721_d55b16f4.pt"
+)
+_LTDETRV2_SEG_X_COCO_SHA256 = (
+    "d55b16f48f05f18e6dd03e3c5c2a3894d0bdeaf468dc80280a727edf5086edcd"
+)
 
 
 class HybridEncoderConfig(PydanticConfig):
@@ -41,6 +72,19 @@ class HybridEncoderConfig(PydanticConfig):
 
 
 class LTDETRHybridEncoderConfig(ConfigsNamespace):
+    class ViTTest(HybridEncoderConfig):
+        in_channels: list[int] = [8, 8, 8]
+        hidden_dim: int = 8
+        use_encoder_idx: list[int] = [2]
+        num_encoder_layers: int = 1
+        nhead: int = 1
+        dim_feedforward: int = 32
+        dropout: float = 0.0
+        enc_act: str = "gelu"
+        expansion: float = 1.0
+        depth_mult: float = 1.0
+        act: str = "silu"
+
     class ViTTiny(HybridEncoderConfig):
         in_channels: list[int] = [192, 192, 192]
         hidden_dim: int = 192
@@ -96,6 +140,13 @@ class ECSegTransformerConfig(PydanticConfig):
 
 
 class LTDETRECSegTransformerConfig(ConfigsNamespace):
+    class ViTTest(ECSegTransformerConfig):
+        feat_channels: list[int] = [8, 8, 8]
+        hidden_dim: int = 8
+        num_layers: int = 1
+        num_queries: int = 20
+        dim_feedforward: int = 32
+
     class ViTTiny(ECSegTransformerConfig):
         feat_channels: list[int] = [192, 192, 192]
         hidden_dim: int = 192
@@ -124,6 +175,11 @@ class ECSegPostProcessorConfig(PydanticConfig):
     num_top_queries: int = 300
 
 
+class LTDETRECSegPostProcessorConfig(ConfigsNamespace):
+    class ViTTest(ECSegPostProcessorConfig):
+        num_top_queries: int = 20
+
+
 class SegmentorConfig(PydanticConfig):
     backbone_name: str
     hybrid_encoder: HybridEncoderConfig
@@ -139,6 +195,14 @@ class SegmentorConfig(PydanticConfig):
 
 
 class LTDETRBaseConfig(ConfigsNamespace):
+    class ViTTest(SegmentorConfig):
+        hybrid_encoder: HybridEncoderConfig = Field(
+            default_factory=LTDETRHybridEncoderConfig.ViTTest
+        )
+        ecseg_postprocessor: ECSegPostProcessorConfig = Field(
+            default_factory=LTDETRECSegPostProcessorConfig.ViTTest
+        )
+
     class ViTTiny(SegmentorConfig):
         hybrid_encoder: HybridEncoderConfig = Field(
             default_factory=LTDETRHybridEncoderConfig.ViTTiny
@@ -157,8 +221,36 @@ class LTDETRBaseConfig(ConfigsNamespace):
 
 
 class LTDETRv2ConfigRegistry(ConfigsNamespace):
+    @LTDETR_SEG_MODEL_REGISTRY.register("edgecrafter/_ecvittest-ltdetr-seg")
+    class EdgeCrafterECViTTest(LTDETRBaseConfig.ViTTest):
+        backbone_name: str = "edgecrafter/_ecvittest-notpretrained"
+        transformer: ECSegTransformerConfig = Field(
+            default_factory=LTDETRECSegTransformerConfig.ViTTest
+        )
+        backbone_wrapper: ECViTBackboneWrapperConfig = Field(
+            default_factory=ECViTBackboneWrapperConfig
+        )
+        backbone_args: dict[str, Any] = Field(
+            default_factory=lambda: {"patch_size": 16}
+        )
+
     @LTDETR_SEG_MODEL_REGISTRY.register(
-        "edgecrafter/ecvitt-ltdetr-seg", "ltdetrv2-seg-s"
+        "edgecrafter/ecvitt-ltdetr-seg",
+        ModelAlias(
+            name="edgecrafter/ecvitt-ltdetr-seg-coco",
+            downloadable_checkpoint=DownloadableCheckpoint(
+                url=_LTDETRV2_SEG_S_COCO_URL,
+                sha256=_LTDETRV2_SEG_S_COCO_SHA256,
+            ),
+        ),
+        "ltdetrv2-seg-s",
+        ModelAlias(
+            name="ltdetrv2-seg-s-coco",
+            downloadable_checkpoint=DownloadableCheckpoint(
+                url=_LTDETRV2_SEG_S_COCO_URL,
+                sha256=_LTDETRV2_SEG_S_COCO_SHA256,
+            ),
+        ),
     )
     class EdgeCrafterECViTTiny(LTDETRBaseConfig.ViTTiny):
         backbone_name: str = "edgecrafter/ecvitt"
@@ -173,7 +265,28 @@ class LTDETRv2ConfigRegistry(ConfigsNamespace):
         )
 
     @LTDETR_SEG_MODEL_REGISTRY.register(
-        "edgecrafter/ecvittplus-ltdetr-seg", "ltdetrv2-seg-m"
+        "_ltdetrv2-seg-s-notpretrained", include_in_model_list=False
+    )
+    class EdgeCrafterECViTTinyNotPretrained(EdgeCrafterECViTTiny):
+        backbone_name: str = "edgecrafter/_ecvitt-notpretrained"
+
+    @LTDETR_SEG_MODEL_REGISTRY.register(
+        "edgecrafter/ecvittplus-ltdetr-seg",
+        ModelAlias(
+            name="edgecrafter/ecvittplus-ltdetr-seg-coco",
+            downloadable_checkpoint=DownloadableCheckpoint(
+                url=_LTDETRV2_SEG_M_COCO_URL,
+                sha256=_LTDETRV2_SEG_M_COCO_SHA256,
+            ),
+        ),
+        "ltdetrv2-seg-m",
+        ModelAlias(
+            name="ltdetrv2-seg-m-coco",
+            downloadable_checkpoint=DownloadableCheckpoint(
+                url=_LTDETRV2_SEG_M_COCO_URL,
+                sha256=_LTDETRV2_SEG_M_COCO_SHA256,
+            ),
+        ),
     )
     class EdgeCrafterECViTTinyPlus(LTDETRBaseConfig.ViTTinyPlus):
         backbone_name: str = "edgecrafter/ecvittplus"
@@ -188,7 +301,22 @@ class LTDETRv2ConfigRegistry(ConfigsNamespace):
         )
 
     @LTDETR_SEG_MODEL_REGISTRY.register(
-        "edgecrafter/ecvits-ltdetr-seg", "ltdetrv2-seg-l"
+        "edgecrafter/ecvits-ltdetr-seg",
+        ModelAlias(
+            name="edgecrafter/ecvits-ltdetr-seg-coco",
+            downloadable_checkpoint=DownloadableCheckpoint(
+                url=_LTDETRV2_SEG_L_COCO_URL,
+                sha256=_LTDETRV2_SEG_L_COCO_SHA256,
+            ),
+        ),
+        "ltdetrv2-seg-l",
+        ModelAlias(
+            name="ltdetrv2-seg-l-coco",
+            downloadable_checkpoint=DownloadableCheckpoint(
+                url=_LTDETRV2_SEG_L_COCO_URL,
+                sha256=_LTDETRV2_SEG_L_COCO_SHA256,
+            ),
+        ),
     )
     class EdgeCrafterECViTSmall(LTDETRBaseConfig.ViTTinyPlus):
         backbone_name: str = "edgecrafter/ecvits"
@@ -203,7 +331,22 @@ class LTDETRv2ConfigRegistry(ConfigsNamespace):
         )
 
     @LTDETR_SEG_MODEL_REGISTRY.register(
-        "edgecrafter/ecvitsplus-ltdetr-seg", "ltdetrv2-seg-x"
+        "edgecrafter/ecvitsplus-ltdetr-seg",
+        ModelAlias(
+            name="edgecrafter/ecvitsplus-ltdetr-seg-coco",
+            downloadable_checkpoint=DownloadableCheckpoint(
+                url=_LTDETRV2_SEG_X_COCO_URL,
+                sha256=_LTDETRV2_SEG_X_COCO_SHA256,
+            ),
+        ),
+        "ltdetrv2-seg-x",
+        ModelAlias(
+            name="ltdetrv2-seg-x-coco",
+            downloadable_checkpoint=DownloadableCheckpoint(
+                url=_LTDETRV2_SEG_X_COCO_URL,
+                sha256=_LTDETRV2_SEG_X_COCO_SHA256,
+            ),
+        ),
     )
     class EdgeCrafterECViTSmallPlus(LTDETRBaseConfig.ViTTinyPlus):
         backbone_name: str = "edgecrafter/ecvitsplus"

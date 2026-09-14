@@ -7,11 +7,13 @@
 #
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Literal
 
 import pytest
 import torch
+from lightly.transforms.utils import IMAGENET_NORMALIZE
 from pytest_mock import MockerFixture
 from pytorch_lightning.strategies.ddp import DDPStrategy
 from torch import Tensor
@@ -21,6 +23,8 @@ from torchvision.datasets import FakeData
 
 from lightly_train._commands import train_helpers
 from lightly_train._loggers.jsonl import JSONLLogger
+from lightly_train._methods import method_helpers
+from lightly_train._methods.distillationv3.distillationv3 import DistillationV3Args
 from lightly_train._methods.simclr.simclr import (
     SimCLR,
     SimCLRArgs,
@@ -178,6 +182,7 @@ def test_get_trainer(tmp_path: Path) -> None:
     trainer = train_helpers.get_trainer(
         out=tmp_path,
         epochs=1,
+        gradient_accumulation_steps=1,
         accelerator="cpu",
         strategy="auto",
         devices="auto",
@@ -191,6 +196,55 @@ def test_get_trainer(tmp_path: Path) -> None:
     assert len(trainer.loggers) == 1
     assert trainer.loggers[0].__class__.__name__ == "JSONLLogger"
     assert trainer.max_epochs == 1
+    assert trainer.accumulate_grad_batches == 1
+
+
+def test_get_trainer_gradient_accumulation(tmp_path: Path) -> None:
+    trainer = train_helpers.get_trainer(
+        out=tmp_path,
+        epochs=1,
+        gradient_accumulation_steps=4,
+        accelerator="cpu",
+        strategy="auto",
+        devices="auto",
+        num_nodes=1,
+        precision=32,
+        log_every_n_steps=1,
+        loggers=[JSONLLogger(save_dir="logs")],
+        callbacks=[],
+        trainer_args=None,
+    )
+
+    assert trainer.accumulate_grad_batches == 4
+
+
+@pytest.mark.parametrize("gradient_accumulation_steps", [1, 4])
+def test_get_trainer_rejects_accumulate_grad_batches_in_trainer_args(
+    tmp_path: Path, gradient_accumulation_steps: int
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"`trainer_args\['accumulate_grad_batches'\]` is not supported\. "
+            r"Use `gradient_accumulation_steps` instead\."
+        ),
+    ):
+        train_helpers.get_trainer(
+            out=tmp_path,
+            epochs=1,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            accelerator="cpu",
+            strategy="auto",
+            devices="auto",
+            num_nodes=1,
+            precision=32,
+            log_every_n_steps=1,
+            loggers=[JSONLLogger(save_dir="logs")],
+            callbacks=[],
+            trainer_args={
+                "accumulate_grad_batches": 8,
+            },
+        )
 
 
 def test_get_lightning_logging_interval() -> None:
@@ -465,6 +519,104 @@ def test_get_transform_args__failure() -> None:
             method="simclr",
             transform_args={"nonexisting_arg": 1},
         )
+
+
+@pytest.mark.parametrize(
+    "teacher",
+    [
+        "dinov2/vitb14",
+        "dinov2/vitb14-tipsv2",
+        "dinov3/vitb16",
+        "dinov3/vitb16-eupe",
+        "dinov3/vitb16-lingbot",
+        "radio/c-radio_v4-h",
+    ],
+)
+@pytest.mark.parametrize(
+    "method",
+    [
+        method
+        for method in method_helpers.list_methods()
+        if method.startswith("distillation")
+    ],
+)
+def test_warn_if_distillation_normalization_mismatch__warns(
+    method: str, teacher: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    normalize_args = NormalizeArgs(mean=(0.0, 0.0, 0.0), std=(1.0, 1.0, 1.0))
+
+    with caplog.at_level(logging.WARNING):
+        train_helpers.warn_if_distillation_normalization_mismatch(
+            method=method,
+            method_args=DistillationV3Args(teacher=teacher),
+            normalize_args=normalize_args,
+        )
+
+    assert caplog.text.count("expects LightlyTrain's ImageNet normalization") == 1
+    assert teacher in caplog.text
+    assert f"mean={tuple(IMAGENET_NORMALIZE['mean'])}" in caplog.text
+    assert f"std={tuple(IMAGENET_NORMALIZE['std'])}" in caplog.text
+    assert f"mean={normalize_args.mean}" in caplog.text
+    assert f"std={normalize_args.std}" in caplog.text
+
+
+def test_warn_if_distillation_normalization_mismatch__model_instance(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    teacher = helpers.dummy_dinov2_vit_model()
+
+    with caplog.at_level(logging.WARNING):
+        train_helpers.warn_if_distillation_normalization_mismatch(
+            method="distillationv3",
+            method_args=DistillationV3Args(teacher=teacher),
+            normalize_args=NormalizeArgs(mean=(0.0, 0.0, 0.0), std=(1.0, 1.0, 1.0)),
+        )
+
+    assert caplog.text.count("expects LightlyTrain's ImageNet normalization") == 1
+
+
+@pytest.mark.parametrize(
+    "method, teacher, normalize_args",
+    [
+        (
+            "distillation",
+            "dinov3/vitb16",
+            NormalizeArgs(
+                mean=tuple(IMAGENET_NORMALIZE["mean"]),
+                std=tuple(IMAGENET_NORMALIZE["std"]),
+            ),
+        ),
+        (
+            "distillation",
+            "timm/vit_base_patch16_224",
+            NormalizeArgs(mean=(0.0, 0.0, 0.0), std=(1.0, 1.0, 1.0)),
+        ),
+        (
+            "distillation",
+            DummyCustomModel(),
+            NormalizeArgs(mean=(0.0, 0.0, 0.0), std=(1.0, 1.0, 1.0)),
+        ),
+        (
+            "simclr",
+            "dinov3/vitb16",
+            NormalizeArgs(mean=(0.0, 0.0, 0.0), std=(1.0, 1.0, 1.0)),
+        ),
+    ],
+)
+def test_warn_if_distillation_normalization_mismatch__does_not_warn(
+    method: str,
+    teacher: str | ModelWrapper,
+    normalize_args: NormalizeArgs,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        train_helpers.warn_if_distillation_normalization_mismatch(
+            method=method,
+            method_args=DistillationV3Args(teacher=teacher),
+            normalize_args=normalize_args,
+        )
+
+    assert "expects LightlyTrain's ImageNet normalization" not in caplog.text
 
 
 def test_load_checkpoint(tmp_path: Path, mocker: MockerFixture) -> None:

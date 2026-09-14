@@ -16,6 +16,7 @@ from lightning_fabric import Fabric
 from lightning_fabric.accelerators.accelerator import Accelerator
 from lightning_fabric.connector import _PRECISION_INPUT  # type: ignore[attr-defined]
 from lightning_fabric.strategies.strategy import Strategy
+from lightning_utilities.core.imports import RequirementCache
 from pydantic import ConfigDict, Field, field_validator
 from torch.optim import Optimizer  # type: ignore[attr-defined]
 from typing_extensions import Annotated, override
@@ -62,6 +63,7 @@ from lightly_train._debug.debug_args import DebugArgs
 from lightly_train._debug.nan_capture import NaNCaptureMonitor
 from lightly_train._debug.underflow_overflow import UnderflowOverflowMonitor
 from lightly_train._events import tracker
+from lightly_train._license import LICENSE_INFO
 from lightly_train._loggers.task_logger_args import TaskLoggerArgs
 from lightly_train._metrics.task_metric import AggregatedMetricValues, TaskMetricArgs
 from lightly_train._task_checkpoint import TaskSaveCheckpointArgs
@@ -71,9 +73,17 @@ from lightly_train._train_task_state import (
     TrainTaskState,
 )
 from lightly_train._training_step_timer import CUDAUtilization, TrainingStepTimer
+from lightly_train.errors import LightlyTrainError
 from lightly_train.types import PathLike
 
 logger = logging.getLogger(__name__)
+
+# Minimum torchmetrics version required by the task metrics. The package as a whole
+# allows torchmetrics>=0.8 because SuperGradients pins torchmetrics==0.8, but the task
+# metrics use arguments (e.g. `backend`, `average`) that were only added in later
+# versions. 1.5 is the version the metrics are tested against.
+TORCHMETRICS_MIN_VERSION = "1.5"
+TORCHMETRICS_SUPPORTED = RequirementCache(f"torchmetrics>={TORCHMETRICS_MIN_VERSION}")
 
 
 def train_image_classification(
@@ -447,7 +457,7 @@ def train_instance_segmentation(
 ) -> None:
     """Train an instance segmentation model.
 
-    See the documentation for more information: https://docs.lightly.ai/train/stable/instance_segmentation.html
+    See the documentation for more information: https://docs.lightly.ai/train/stable/instance_segmentation/index.html
 
         The training process can be monitored with TensorBoard:
 
@@ -464,7 +474,7 @@ def train_instance_segmentation(
         data:
             The dataset configuration or path to a YAML file with the configuration.
             See the documentation for more information:
-            https://docs.lightly.ai/train/stable/instance_segmentation.html#data
+            https://docs.lightly.ai/train/stable/instance_segmentation/eomt.html#instance-segmentation-eomt-data
         model:
             The model to train. For example, "dinov2/vits14-eomt",
             "dinov3/vits16-eomt-coco", or a path to a local model checkpoint.
@@ -531,7 +541,7 @@ def train_instance_segmentation(
             To disable a logger, set it to None: ``logger_args={"tensorboard": None}``.
             To configure a logger, pass the respective arguments:
             ``logger_args={"mlflow": {"experiment_name": "my_experiment", ...}}``.
-            See https://docs.lightly.ai/train/stable/instance_segmentation.html#logging
+            See https://docs.lightly.ai/train/stable/instance_segmentation/eomt.html#instance-segmentation-eomt-logging
             for more information.
         model_args:
             Model training arguments. Either None or a dictionary of model arguments.
@@ -1265,7 +1275,33 @@ def _train_task(
     _train_task_from_config(config=config)
 
 
+def _raise_if_torchmetrics_unsupported() -> None:
+    """Fails early if the installed torchmetrics version is too old for task metrics.
+
+    Without this check, training fails much later with a confusing TypeError about
+    unexpected keyword arguments once the metrics are instantiated.
+    """
+    if TORCHMETRICS_SUPPORTED:
+        return
+
+    try:
+        from torchmetrics import __version__ as torchmetrics_version
+
+        found = f"Found torchmetrics {torchmetrics_version}."
+    except ImportError:
+        found = "torchmetrics is not installed."
+
+    raise LightlyTrainError(
+        f"Fine-tuning requires torchmetrics>={TORCHMETRICS_MIN_VERSION}. {found} This "
+        "usually happens when SuperGradients is installed, as it requires "
+        "torchmetrics==0.8. Install a newer version with "
+        f"`pip install 'torchmetrics>={TORCHMETRICS_MIN_VERSION}'` or uninstall "
+        "SuperGradients."
+    )
+
+
 def _train_task_from_config(config: TrainTaskConfig) -> None:
+    _raise_if_torchmetrics_unsupported()
     initial_config = config.model_dump()
     # NOTE(Guarin, 07/25): We add callbacks and loggers later to fabric because we first
     # have to initialize the output directory and some other things. Fabric doesn't
@@ -1622,16 +1658,6 @@ def _train_task_from_config(config: TrainTaskConfig) -> None:
                     hyperparams["overwrite"] = True
                 logger_instance.log_hyperparams(hyperparams)
 
-            LICENSE_INFO = (
-                "LightlyTrain License Notice\n"
-                "\n"
-                "Model training and inference in commercial settings require a valid Commercial License.\n"
-                "If you are using LightlyTrain for open-source (AGPL-3.0) or under a Free Community License,\n"
-                "please ensure your usage complies with the respective terms.\n"
-                "See https://docs.lightly.ai/train/stable/index.html#license for more details.\n"
-                "Contact us at https://www.lightly.ai/contact to discuss the best licensing option for your use case."
-            )
-
             # TODO(Guarin, 02/26): Add best metric to state?
             best_agg_metric_values: BestAggregatedMetricValues | None = None
 
@@ -1652,9 +1678,11 @@ def _train_task_from_config(config: TrainTaskConfig) -> None:
                     checkpoint_path=checkpoint_path,
                 )
             elif checkpoint is not None:
+                assert checkpoint_path is not None
                 helpers.finetune_from_checkpoint(
                     state=state,
                     checkpoint=checkpoint,
+                    checkpoint_path=checkpoint_path,
                 )
 
             # Add license info after loading as it might be missing from the checkpoint.

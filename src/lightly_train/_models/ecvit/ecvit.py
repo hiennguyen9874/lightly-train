@@ -28,6 +28,8 @@ Modified from https://huggingface.co/spaces/Hila/RobustViT/blob/main/ViT/ViT_new
 - Ported the ECViT backbone adapter to Lightly.
 - Removed EdgeCrafter registry/distributed dependencies.
 - Added typed LTDETR-compatible tuple output.
+- Added opt-in activation checkpointing for the transformer blocks.
+- Added a configurable `depth` and a tiny "ecvittest" preset for fast tests.
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ import warnings
 from collections.abc import Mapping
 from functools import partial
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, List, cast
 
 import torch
 import torch.nn as nn
@@ -45,6 +47,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from typing_extensions import Self
 
+from lightly_train._activation_checkpointing import maybe_checkpoint
 from lightly_train._models.dinov3.dinov3_src.layers.ffn_layers import Mlp
 from lightly_train._models.dinov3.dinov3_src.layers.rope_position_encoding import (
     RopePositionEmbedding,
@@ -55,6 +58,7 @@ from lightly_train._models.model_wrapper import (
     ForwardFeaturesOutput,
     ForwardPoolOutput,
     ModelWrapper,
+    SupportsActivationCheckpointing,
 )
 from lightly_train._task_models.object_detection_components.hybrid_encoder import (
     ConvNormLayer,
@@ -72,7 +76,7 @@ ECVIT_PRETRAINED_URLS: dict[str, str] = {
 }
 
 
-ECVIT_PRESETS: dict[str, dict[str, int | None | float]] = {
+ECVIT_PRESETS: dict[str, dict[str, int | None | float | list[int]]] = {
     "ecvitt": {
         "embed_dim": 192,
         "num_heads": 3,
@@ -96,6 +100,17 @@ ECVIT_PRESETS: dict[str, dict[str, int | None | float]] = {
         "num_heads": 6,
         "proj_dim": 256,
         "ffn_ratio": 6.0,
+    },
+    # Genuinely tiny preset for fast tests: small width and depth, unlike the
+    # "-notpretrained" variants of the presets above, which only skip weight
+    # loading and keep the full production-sized architecture.
+    "ecvittest": {
+        "embed_dim": 8,
+        "num_heads": 1,
+        "proj_dim": None,
+        "ffn_ratio": 1.0,
+        "depth": 2,
+        "interaction_indexes": [0, 1],
     },
 }
 
@@ -372,6 +387,10 @@ class VisionTransformer(nn.Module):
             ]
         )
 
+        # Configured post-instantiation via ECViTModelWrapper.
+        self._activation_checkpointing = False
+        self._activation_checkpointing_every_n_blocks = 1
+
         self.rope_embed = RopePositionEmbedding(
             embed_dim=embed_dim,
             num_heads=num_heads,
@@ -413,7 +432,15 @@ class VisionTransformer(nn.Module):
         rope_sincos = sin.unsqueeze(0).unsqueeze(0), cos.unsqueeze(0).unsqueeze(0)
 
         for i, blk in enumerate(self.blocks):
-            x = blk(x, rope_sincos=rope_sincos)
+            x = maybe_checkpoint(
+                blk,
+                x,
+                rope_sincos=rope_sincos,
+                use_activation_checkpointing=self._activation_checkpointing
+                and self.training,
+                block_index=i,
+                every_n_blocks=self._activation_checkpointing_every_n_blocks,
+            )
             if i in self.return_layers:
                 outs.append(x[:, 1:])
         return outs, (H, W)
@@ -423,7 +450,12 @@ class VisionTransformer(nn.Module):
         return outs
 
 
-class ECViTModelWrapper(nn.Module, ModelWrapper, ArchitectureInfoGettable):
+class ECViTModelWrapper(
+    nn.Module,
+    ModelWrapper,
+    ArchitectureInfoGettable,
+    SupportsActivationCheckpointing,
+):
     """EdgeCrafter ECViT backbone wrapper for LTDETR-style feature pyramids.
 
     The forward path intentionally follows EdgeCrafter's ECViT adapter:
@@ -444,6 +476,7 @@ class ECViTModelWrapper(nn.Module, ModelWrapper, ArchitectureInfoGettable):
         embed_layer: str = "ConvPyramidPatchEmbed",
         ffn_layer: str = "mlp",
         ffn_ratio: float | object = _DEFAULT,
+        depth: int | object = _DEFAULT,
         skip_load_backbone: bool = False,
         **kwargs: Any,
     ) -> None:
@@ -485,7 +518,12 @@ class ECViTModelWrapper(nn.Module, ModelWrapper, ArchitectureInfoGettable):
         resolved_ffn_ratio = cast(
             float, preset["ffn_ratio"] if ffn_ratio is _DEFAULT else ffn_ratio
         )
-        resolved_interaction_indexes = interaction_indexes or [10, 11]
+        resolved_depth = cast(
+            int, preset.get("depth", 12) if depth is _DEFAULT else depth
+        )
+        resolved_interaction_indexes = interaction_indexes or cast(
+            List[int], preset.get("interaction_indexes", [10, 11])
+        )
 
         self.name = name
         self.interaction_indexes = resolved_interaction_indexes
@@ -502,6 +540,7 @@ class ECViTModelWrapper(nn.Module, ModelWrapper, ArchitectureInfoGettable):
         self.backbone = VisionTransformer(
             embed_dim=resolved_embed_dim,
             num_heads=resolved_num_heads,
+            depth=resolved_depth,
             return_layers=resolved_interaction_indexes,
             patch_size=patch_size,
             embed_layer=EMBED_LAYER_REGISTRY[embed_layer],
@@ -526,6 +565,13 @@ class ECViTModelWrapper(nn.Module, ModelWrapper, ArchitectureInfoGettable):
     @property
     def backbone_model(self) -> nn.Module:
         return self.backbone
+
+    def set_activation_checkpointing(
+        self, enabled: bool, every_n_blocks: int = 1
+    ) -> None:
+        # Target the backbone directly: get_model() returns the wrapper itself.
+        self.backbone._activation_checkpointing = enabled
+        self.backbone._activation_checkpointing_every_n_blocks = every_n_blocks
 
     def _load_backbone_weights(self, weights_path: PathLike) -> None:
         state = _load_torch_checkpoint(Path(weights_path))
